@@ -10,10 +10,11 @@ const removeWhere = (list, predicate) => {
 }
 
 class IdleItem {
-  constructor(client, idleListener, timeoutId) {
+  constructor(client, idleListener, timeoutId, timeoutAt) {
     this.client = client
     this.idleListener = idleListener
     this.timeoutId = timeoutId
+    this.timeoutAt = timeoutAt
   }
 }
 
@@ -125,9 +126,18 @@ class Pool extends EventEmitter {
       return
     }
     const pendingItem = this._pendingQueue.shift()
+    if (this.options.idleTimeoutCheckOnConnect && this._idle.length) {
+      const now = Date.now()
+      this._idle
+        .filter((item) => item.timeoutAt < now)
+        .forEach((item) => {
+          this.log('remove idle client')
+          this._remove(item.client)
+        })
+    }
     if (this._idle.length) {
       const idleItem = this._idle.pop()
-      clearTimeout(idleItem.timeoutId)
+      if (idleItem.timeoutId) clearTimeout(idleItem.timeoutId)
       const client = idleItem.client
       const idleListener = idleItem.idleListener
 
@@ -143,7 +153,7 @@ class Pool extends EventEmitter {
     const removed = removeWhere(this._idle, (item) => item.client === client)
 
     if (removed !== undefined) {
-      clearTimeout(removed.timeoutId)
+      if (removed.timeoutId) clearTimeout(removed.timeoutId)
     }
 
     this._clients = this._clients.filter((c) => c !== client)
@@ -311,14 +321,19 @@ class Pool extends EventEmitter {
 
     // idle timeout
     let tid
+    let timeoutAt
     if (this.options.idleTimeoutMillis) {
-      tid = setTimeout(() => {
-        this.log('remove idle client')
-        this._remove(client)
-      }, this.options.idleTimeoutMillis)
+      if (this.options.idleTimeoutCheckOnConnect) {
+        timeoutAt = Date.now() + this.options.idleTimeoutMillis
+      } else {
+        tid = setTimeout(() => {
+          this.log('remove idle client')
+          this._remove(client)
+        }, this.options.idleTimeoutMillis)
+      }
     }
 
-    this._idle.push(new IdleItem(client, idleListener, tid))
+    this._idle.push(new IdleItem(client, idleListener, tid, timeoutAt))
     this._pulseQueue()
   }
 
